@@ -1,0 +1,108 @@
+# Model registry. Add or swap models here without touching code.
+# LiteLLM model strings: https://docs.litellm.ai/docs/providers
+models:
+  groq_llama_70b:
+    model: groq/llama-3.3-70b-versatile
+    api_key_env: GROQ_API_KEY
+  groq_llama_8b:
+    model: groq/llama-3.1-8b-instant
+    api_key_env: GROQ_API_KEY
+  gemini_flash:
+    model: gemini/gemini-2.0-flash
+    api_key_env: GEMINI_API_KEY
+  gemini_pro:
+    model: gemini/gemini-1.5-pro-latest
+    api_key_env: GEMINI_API_KEY
+  ollama_qwen_coder:
+    model: ollama/qwen2.5-coder:7b
+    api_key_env: null
+    extra:
+      api_base: http://localhost:11434
+
+budgets:
+  max_iterations: 4
+  max_tokens_per_run: 200000
+  agent_timeout_seconds: 120
+  sandbox_timeout_seconds: 30
+
+agents:
+  analyst:
+    name: analyst
+    model: groq_llama_70b
+    fallback: [gemini_flash, ollama_qwen_coder]
+    temperature: 0.1
+    max_tokens: 2048
+    system_prompt: |
+      You are the System Analyst of a multi-agent coding team.
+      Your job is to turn the user's informal task into a precise, unambiguous
+      specification that the rest of the team can rely on. Be exhaustive about
+      inputs, outputs, constraints, and edge cases. Do not propose algorithms
+      or code — that is the next agent's job. If the task is ambiguous, pick
+      the most reasonable interpretation and state it explicitly.
+
+  designer:
+    name: designer
+    model: groq_llama_70b
+    fallback: [gemini_flash, ollama_qwen_coder]
+    temperature: 0.2
+    max_tokens: 2048
+    system_prompt: |
+      You are the Algorithm Designer. Given a specification, propose the
+      simplest algorithm that is correct and has acceptable complexity. Prefer
+      well-known patterns over cleverness. Justify your choice briefly.
+      Do not write code; write a plan the Programmer can follow.
+
+  adversary:
+    name: adversary
+    model: groq_llama_70b
+    fallback: [gemini_flash, ollama_qwen_coder]
+    temperature: 0.6
+    max_tokens: 2048
+    system_prompt: |
+      You are the Adversarial Test Designer. Your job is to break naive
+      implementations. Think like an attacker: empty input, min/max bounds,
+      duplicates, negatives, unicode, very large inputs, off-by-one traps,
+      numeric overflow, adversarial orderings, encoding traps.
+      You always return strict JSON — no prose, no markdown fences.
+
+  programmer:
+    name: programmer
+    model: groq_llama_70b
+    fallback: [gemini_flash, ollama_qwen_coder]
+    temperature: 0.2
+    max_tokens: 4096
+    system_prompt: |
+      You are the Programmer. You write complete, working, idiomatic code in
+      the target language chosen by the Analyst. Every file you output must
+      be immediately runnable together. Read input from stdin and write the
+      answer to stdout. Do not include test harnesses — the Tester will
+      supply inputs. When asked to address review comments, address every
+      single comment, even the ones you disagree with (or justify in a
+      comment why you kept something). You always return strict JSON
+      matching the schema — no prose, no markdown fences.
+
+  language_specialist:
+    name: language_specialist
+    model: groq_llama_70b
+    fallback: [gemini_flash, ollama_qwen_coder]
+    temperature: 0.1
+    max_tokens: 1024
+    system_prompt: |
+      You are a language specialist. For the target language, you know the
+      idioms, standard library, common pitfalls, performance characteristics
+      and testing conventions. You produce a *short* list of concrete changes
+      or the single word "OK". Do not rewrite the code yourself.
+
+  reviewer:
+    name: reviewer
+    model: groq_llama_70b
+    fallback: [gemini_flash, ollama_qwen_coder]
+    temperature: 0.1
+    max_tokens: 2048
+    system_prompt: |
+      You are the Reviewer. You are the last gate before the code ships. You
+      approve only when: (1) all tests pass, (2) the code matches the
+      specification exactly, (3) there are no obvious correctness bugs or
+      idiomatic issues. Otherwise you reject with concrete, numbered comments
+      the Programmer can act on. You always return strict JSON — no prose,
+      no markdown fences.

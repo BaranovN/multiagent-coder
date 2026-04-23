@@ -1,0 +1,60 @@
+[project]
+name = "multiagent-coder"
+version = "0.1.0"
+description = "Multi-agent system for solving coding tasks: Orchestrator routes a task through Analyst, Algorithm Designer, Adversarial Test Designer, Programmer, Language Specialist, Tester and Reviewer."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Baranov Nikita", email = "mrcatton2006@gmail.com" },
+]
+dependencies = [
+    "langgraph>=0.2.60",
+    "langchain-core>=0.3.20",
+    "litellm>=1.57.0",
+    "pydantic>=2.9.0",
+    "pyyaml>=6.0.2",
+    "rich>=13.9.0",
+    "typer>=0.15.0",
+    "python-dotenv>=1.0.1",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+tracing = [
+    "langfuse>=2.57.0",
+]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.25.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+]
+
+[project.scripts]
+mac = "mac.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mac"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+warn_return_any = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

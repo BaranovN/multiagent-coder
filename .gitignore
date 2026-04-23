@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+
+# uv
+.uv/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Env / secrets
+.env
+.env.local
+*.key
+
+# Runs / artifacts
+runs/
+artifacts/
+.sandbox/
+*.log
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+# Langfuse local data
+langfuse-data/
