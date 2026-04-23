@@ -205,6 +205,69 @@ PROGRAMMER_OUTPUT_SCHEMA = (
     '"explanation": str}'
 )
 
+# A one-shot example pinned in the prompt below. Helps models that otherwise
+# collapse the wrapper object and return just the `files` array.
+_PROGRAMMER_EXAMPLE = (
+    '{"files": [{"path": "main.py", "content": "print(\\"hello\\")\\n"}], '
+    '"build_command": null, "run_command": "python main.py", '
+    '"explanation": "Trivial script"}'
+)
+
+
+def _coerce_programmer_output(data: Any, language: str | None) -> dict[str, Any]:
+    """Accept a few common shapes so the pipeline doesn't break on models that
+    drop the wrapper object. Returns a normalised
+    ``{files, build_command, run_command}`` dict.
+    """
+    # Shape 1: already the expected object.
+    if isinstance(data, dict) and "files" in data and isinstance(data["files"], list):
+        return {
+            "files": data["files"],
+            "build_command": data.get("build_command") or None,
+            "run_command": data.get("run_command") or _infer_run_command(data["files"], language),
+        }
+
+    # Shape 2: a bare list of {path, content} — pretend we got the wrapper.
+    if isinstance(data, list) and all(
+        isinstance(x, dict) and "path" in x and "content" in x for x in data
+    ):
+        return {
+            "files": data,
+            "build_command": None,
+            "run_command": _infer_run_command(data, language),
+        }
+
+    # Shape 3: a single {path, content} object (one-file solution).
+    if isinstance(data, dict) and {"path", "content"} <= set(data.keys()):
+        files = [{"path": data["path"], "content": data["content"]}]
+        return {
+            "files": files,
+            "build_command": None,
+            "run_command": _infer_run_command(files, language),
+        }
+
+    raise ValueError(f"programmer returned unparseable shape: {json.dumps(data)[:500]}")
+
+
+def _infer_run_command(files: list[dict[str, str]], language: str | None) -> str:
+    """Best-effort run command for common languages so the Tester still has
+    something to execute when the model forgets to specify one."""
+    paths = [f.get("path", "") for f in files]
+    lang = (language or "").lower()
+    if lang.startswith("python") or any(p.endswith(".py") for p in paths):
+        main = next((p for p in paths if p.endswith(".py")), "main.py")
+        return f"python {main}"
+    if lang in ("javascript", "typescript", "node") or any(
+        p.endswith((".js", ".mjs")) for p in paths
+    ):
+        main = next((p for p in paths if p.endswith((".js", ".mjs"))), "main.js")
+        return f"node {main}"
+    if lang == "go" or any(p.endswith(".go") for p in paths):
+        return "go run ."
+    if lang == "rust" or any(p.endswith(".rs") for p in paths):
+        return "cargo run --release -q"
+    return "bash run.sh"
+
 
 async def programmer_node(state: RunState, cfg: Config) -> dict[str, Any]:
     agent = cfg.agent("programmer")
@@ -233,8 +296,11 @@ async def programmer_node(state: RunState, cfg: Config) -> dict[str, Any]:
         f"{feedback}\n\n"
         "Produce a complete, self-contained implementation. Read input from stdin, "
         "write the answer to stdout — this is how the Tester will run it.\n\n"
-        "Return JSON with this shape (and nothing else):\n"
+        "Return ONE JSON OBJECT with this exact shape (do not return a bare "
+        "array of files — the outer object is required):\n"
         f"{PROGRAMMER_OUTPUT_SCHEMA}\n\n"
+        "Example:\n"
+        f"{_PROGRAMMER_EXAMPLE}\n\n"
         "Rules:\n"
         "- `files[].path` is relative to the project root. Use idiomatic layout for the language.\n"
         "- `build_command` is a single shell command, or null if none is needed (e.g. Python).\n"
@@ -248,12 +314,10 @@ async def programmer_node(state: RunState, cfg: Config) -> dict[str, Any]:
         [{"role": "system", "content": agent.system_prompt}, {"role": "user", "content": user}],
         schema_hint=PROGRAMMER_OUTPUT_SCHEMA,
     )
-    if not isinstance(data, dict) or "files" not in data:
-        raise ValueError(f"programmer returned bad shape: {json.dumps(data)[:500]}")
-
-    files = {f["path"]: f["content"] for f in data["files"]}
-    build_command = data.get("build_command") or None
-    run_command = data["run_command"]
+    normalised = _coerce_programmer_output(data, state.language)
+    files = {f["path"]: f["content"] for f in normalised["files"]}
+    build_command = normalised["build_command"]
+    run_command = normalised["run_command"]
 
     return {
         "files": files,
