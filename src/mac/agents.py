@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from .config import Config
@@ -81,19 +82,49 @@ async def analyst_node(state: RunState, cfg: Config) -> dict[str, Any]:
     }
 
 
+_KNOWN_LANGUAGES = [
+    "Python",
+    "Rust",
+    "C++",
+    "TypeScript",
+    "JavaScript",
+    "Go",
+    "Java",
+    "C#",
+    "Kotlin",
+    "Swift",
+    "Ruby",
+    "C",
+]
+
+
 def _extract_language(spec: str) -> str | None:
-    lowered = spec.lower()
-    # Crude but effective: look for "recommended target language:" line.
-    for line in spec.splitlines():
-        if "target language" in line.lower():
-            # trim everything before the colon
-            tail = line.split(":", 1)[-1].strip().strip(".*_ ")
-            if tail:
-                return tail.split()[0]
-    for lang in ("python", "rust", "c++", "typescript", "go", "java", "c#"):
-        if lang in lowered:
-            return lang.capitalize() if lang != "c++" else "C++"
+    """Pick the first known language name mentioned in or near the "target
+    language" line. Falls back to a global scan if nothing is found there.
+    """
+    lines = spec.splitlines()
+    for i, line in enumerate(lines):
+        if "target language" not in line.lower():
+            continue
+        # Scan this line and the next one (e.g. a heading followed by a prose line).
+        candidates = [line]
+        if i + 1 < len(lines):
+            candidates.append(lines[i + 1])
+        for cand in candidates:
+            for lang in _KNOWN_LANGUAGES:
+                if _mentions_language(cand, lang):
+                    return lang
+    for lang in _KNOWN_LANGUAGES:
+        if _mentions_language(spec, lang):
+            return lang
     return None
+
+
+def _mentions_language(text: str, lang: str) -> bool:
+    """Case-insensitive, punctuation-tolerant match, with `C` and `Go` being
+    short enough that we require word boundaries to avoid false positives."""
+    pattern = rf"(?<![A-Za-z0-9_]){re.escape(lang)}(?![A-Za-z0-9_])"
+    return re.search(pattern, text, re.IGNORECASE) is not None
 
 
 # ---------------------------------------------------------------------------

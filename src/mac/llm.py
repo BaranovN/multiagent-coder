@@ -151,20 +151,40 @@ async def complete_json(
 ) -> tuple[dict[str, Any] | list[Any], LLMResponse]:
     """Ask the model for JSON output and parse it.
 
-    We try provider-native JSON mode first (response_format), then fall back to
-    plain completion with a strict instruction and a tolerant parser.
+    Strategy: always append a strict "JSON only" instruction to the prompt.
+    Try native JSON mode on the primary provider only (so a single
+    provider's broken JSON mode doesn't burn through all fallbacks). If
+    that fails, fall back to plain-mode completion with the full provider
+    chain.
     """
-    try:
-        resp = await complete(cfg, agent, messages, response_format={"type": "json_object"})
-        return _parse_json_loose(resp.text), resp
-    except Exception as e:
-        logger.info("JSON mode failed (%s); retrying in plain mode", e)
-
     plain_messages = list(messages)
-    instruction = "Respond with a single valid JSON value and nothing else."
+    instruction = (
+        "Respond with a single valid JSON value and nothing else. "
+        "Do not wrap it in markdown fences or add commentary."
+    )
     if schema_hint:
-        instruction += f" Schema: {schema_hint}"
+        instruction += f" The JSON must match this schema: {schema_hint}"
     plain_messages.append({"role": "system", "content": instruction})
+
+    primary = cfg.model(agent.model)
+    if _model_available(primary):
+        try:
+            resp = await _call_once(
+                primary,
+                plain_messages,
+                temperature=agent.temperature,
+                max_tokens=agent.max_tokens,
+                response_format={"type": "json_object"},
+                timeout=cfg.budgets.agent_timeout_seconds,
+            )
+            return _parse_json_loose(resp.text), resp
+        except Exception as e:
+            logger.info(
+                "native JSON mode on %s failed (%s); falling back to plain chain",
+                primary.model,
+                type(e).__name__,
+            )
+
     resp = await complete(cfg, agent, plain_messages)
     return _parse_json_loose(resp.text), resp
 

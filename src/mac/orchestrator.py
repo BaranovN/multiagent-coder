@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END, START, StateGraph  # type: ignore[import-untyped]
 
 from .agents import (
     adversary_node,
@@ -51,9 +51,6 @@ def build_graph(cfg: Config | None = None):
     async def _reviewer(s: RunState) -> dict:
         return await reviewer_node(s, cfg)
 
-    def after_language_specialist(s: RunState) -> Literal["programmer", "tester"]:
-        return "programmer" if s.language_notes else "tester"
-
     def after_reviewer(s: RunState) -> Literal["end", "programmer"]:
         if s.review and s.review.approved:
             return "end"
@@ -77,11 +74,10 @@ def build_graph(cfg: Config | None = None):
     g.add_edge("designer", "adversary")
     g.add_edge("adversary", "programmer")
     g.add_edge("programmer", "language_specialist")
-    g.add_conditional_edges(
-        "language_specialist",
-        after_language_specialist,
-        {"programmer": "programmer", "tester": "tester"},
-    )
+    # Language specialist's notes become feedback for the NEXT Programmer
+    # iteration (if any) — they don't loop back immediately, to keep the
+    # graph bounded and avoid chatty-specialist deadlocks.
+    g.add_edge("language_specialist", "tester")
     g.add_edge("tester", "reviewer")
     g.add_conditional_edges(
         "reviewer",
@@ -96,9 +92,10 @@ async def run_task(task: str, *, language: str | None = None) -> RunState:
     cfg = load_config()
     graph = build_graph(cfg)
     state = RunState(task=task, language=language)
-    # Graph recursion limit must be high enough to cover max_iterations loops
-    # through the reviewer → programmer cycle plus the initial straight-through.
-    recursion_limit = max(25, cfg.budgets.max_iterations * 6 + 10)
+    # Each straight-through pass is: programmer -> language_specialist ->
+    # tester -> reviewer -> (loop). Four nodes per iteration + the initial
+    # analyst/designer/adversary head, plus slack for conditional hops.
+    recursion_limit = max(40, cfg.budgets.max_iterations * 5 + 15)
     final = await graph.ainvoke(state, config={"recursion_limit": recursion_limit})
 
     # LangGraph returns either a RunState instance or a dict depending on version.
