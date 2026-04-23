@@ -1,0 +1,171 @@
+# Model registry. Add or swap models here without touching code.
+# LiteLLM model strings: https://docs.litellm.ai/docs/providers
+#
+# Fallback strategy: Groq is fast but rate-limited (~30 rpm free tier), so we
+# use it as the primary for low-latency calls and fall through to OpenRouter's
+# free models when Groq rate-limits or errors. OpenRouter also proxies Gemini,
+# which is handy in regions where Google blocks direct API-key creation.
+models:
+  # --- Groq (free tier; very fast) ----------------------------------------
+  groq_llama_70b:
+    model: groq/llama-3.3-70b-versatile
+    api_key_env: GROQ_API_KEY
+  groq_llama_8b:
+    model: groq/llama-3.1-8b-instant
+    api_key_env: GROQ_API_KEY
+
+  # --- Cerebras Cloud (free tier; ~2000 tok/s) ----------------------------
+  # Hosts very large open models on wafer-scale chips. Verify available
+  # models with:
+  #   curl -H "Authorization: Bearer $CEREBRAS_API_KEY" \
+  #        https://api.cerebras.ai/v1/models | jq
+  cerebras_qwen_235b:
+    model: cerebras/qwen-3-235b-a22b-instruct-2507
+    api_key_env: CEREBRAS_API_KEY
+  cerebras_gpt_oss_120b:
+    model: cerebras/gpt-oss-120b
+    api_key_env: CEREBRAS_API_KEY
+  cerebras_llama_8b:
+    model: cerebras/llama3.1-8b
+    api_key_env: CEREBRAS_API_KEY
+
+  # --- OpenRouter (free tier via :free models; works worldwide) -----------
+  # Which models appear on the :free tier changes over time; verify with
+  # `curl -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+  #    https://openrouter.ai/api/v1/models | jq '.data[] | select(.id|endswith(":free")) | .id'`
+  # before editing.
+  openrouter_qwen3_coder:
+    model: openrouter/qwen/qwen3-coder:free
+    api_key_env: OPENROUTER_API_KEY
+  openrouter_llama_70b:
+    model: openrouter/meta-llama/llama-3.3-70b-instruct:free
+    api_key_env: OPENROUTER_API_KEY
+  openrouter_gemma_27b:
+    model: openrouter/google/gemma-3-27b-it:free
+    api_key_env: OPENROUTER_API_KEY
+
+  # --- Google Gemini direct (if you have a working key) -------------------
+  gemini_flash:
+    model: gemini/gemini-2.0-flash
+    api_key_env: GEMINI_API_KEY
+  gemini_pro:
+    model: gemini/gemini-1.5-pro-latest
+    api_key_env: GEMINI_API_KEY
+
+  # --- Local Ollama (last-ditch fallback) ---------------------------------
+  ollama_qwen_coder:
+    model: ollama/qwen2.5-coder:7b
+    api_key_env: null
+    extra:
+      api_base: http://localhost:11434
+
+# Budgets: enforced by the orchestrator. Override via env vars
+# MAC_MAX_ITERATIONS, MAC_MAX_TOKENS_PER_RUN, MAC_SANDBOX_TIMEOUT.
+budgets:
+  max_iterations: 4
+  max_tokens_per_run: 200000
+  agent_timeout_seconds: 120
+  sandbox_timeout_seconds: 30
+
+# Default fallback chain reused by every agent below. Keep the same order
+# across agents so a failing provider drains the whole run uniformly.
+# (YAML anchors expand inline; the `<<:` merge keeps per-agent overrides tidy.)
+_defaults: &defaults
+  # Cerebras sits ahead of OpenRouter in the fallback because OpenRouter's
+  # free tier is shared and often returns upstream 429s during peak hours.
+  fallback:
+    - cerebras_qwen_235b
+    - cerebras_gpt_oss_120b
+    - openrouter_qwen3_coder
+    - openrouter_llama_70b
+    - ollama_qwen_coder
+
+agents:
+  analyst:
+    <<: *defaults
+    name: analyst
+    model: groq_llama_70b
+    temperature: 0.1
+    max_tokens: 2048
+    system_prompt: |
+      You are the System Analyst of a multi-agent coding team.
+      Your job is to turn the user's informal task into a precise, unambiguous
+      specification that the rest of the team can rely on. Be exhaustive about
+      inputs, outputs, constraints, and edge cases. Do not propose algorithms
+      or code — that is the next agent's job. If the task is ambiguous, pick
+      the most reasonable interpretation and state it explicitly.
+
+  designer:
+    <<: *defaults
+    name: designer
+    model: groq_llama_70b
+    temperature: 0.2
+    max_tokens: 2048
+    system_prompt: |
+      You are the Algorithm Designer. Given a specification, propose the
+      simplest algorithm that is correct and has acceptable complexity. Prefer
+      well-known patterns over cleverness. Justify your choice briefly.
+      Do not write code; write a plan the Programmer can follow.
+
+  adversary:
+    <<: *defaults
+    name: adversary
+    model: groq_llama_70b
+    temperature: 0.6
+    max_tokens: 2048
+    system_prompt: |
+      You are the Adversarial Test Designer. Your job is to break naive
+      implementations. Think like an attacker: empty input, min/max bounds,
+      duplicates, negatives, unicode, very large inputs, off-by-one traps,
+      numeric overflow, adversarial orderings, encoding traps.
+      You always return strict JSON — no prose, no markdown fences.
+
+  programmer:
+    <<: *defaults
+    name: programmer
+    # Cerebras Qwen-3 235B is a massive MoE hosted at ~2000 tok/s — strongest
+    # free option for code generation. Groq stays as a fast general fallback.
+    model: cerebras_qwen_235b
+    fallback:
+      - openrouter_qwen3_coder
+      - groq_llama_70b
+      - cerebras_gpt_oss_120b
+      - openrouter_llama_70b
+      - ollama_qwen_coder
+    temperature: 0.2
+    max_tokens: 4096
+    system_prompt: |
+      You are the Programmer. You write complete, working, idiomatic code in
+      the target language chosen by the Analyst. Every file you output must
+      be immediately runnable together. Read input from stdin and write the
+      answer to stdout. Do not include test harnesses — the Tester will
+      supply inputs. When asked to address review comments, address every
+      single comment, even the ones you disagree with (or justify in a
+      comment why you kept something). You always return strict JSON
+      matching the schema — no prose, no markdown fences.
+
+  language_specialist:
+    <<: *defaults
+    name: language_specialist
+    model: groq_llama_70b
+    temperature: 0.1
+    max_tokens: 1024
+    system_prompt: |
+      You are a language specialist. For the target language, you know the
+      idioms, standard library, common pitfalls, performance characteristics
+      and testing conventions. You produce a *short* list of concrete changes
+      or the single word "OK". Do not rewrite the code yourself.
+
+  reviewer:
+    <<: *defaults
+    name: reviewer
+    model: groq_llama_70b
+    temperature: 0.1
+    max_tokens: 2048
+    system_prompt: |
+      You are the Reviewer. You are the last gate before the code ships. You
+      approve only when: (1) all tests pass, (2) the code matches the
+      specification exactly, (3) there are no obvious correctness bugs or
+      idiomatic issues. Otherwise you reject with concrete, numbered comments
+      the Programmer can act on. You always return strict JSON — no prose,
+      no markdown fences.
